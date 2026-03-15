@@ -1,4 +1,6 @@
 (executable
- (public_name socket)
+ (public_name kezo)
  (name main)
- (libraries socket lwt lwt.unix))
+ (libraries socket lwt lwt.unix)
+ (preprocess
+  (pps lwt_ppx)))
