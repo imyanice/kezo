@@ -1,6 +1,8 @@
+(include_subdirs qualified)
+
 (executable
  (public_name kezo)
  (name main)
- (libraries socket lwt lwt.unix)
+ (libraries kezo lwt lwt.unix)
  (preprocess
   (pps lwt_ppx)))

@@ -1,4 +1,7 @@
 let ( let* ) = Lwt.bind
+
+open Packets.Types
+
 let max_packet_size = 65_535
 
 module ClientsMap = Map.Make (Int)
@@ -6,194 +9,10 @@ module ClientsMap = Map.Make (Int)
 let clients_map : Lwt_io.output Lwt_io.channel ClientsMap.t ref =
   ref ClientsMap.empty
 
-type inventory_items = Default
-type location = Spawn | IDF
-
-module Users = struct
-  type t = {
-    username : string;
-    uuid : string;
-    inventory : (inventory_items * int) list;
-    position : float * float;
-    location : location;
-  }
-
-  let init =
-    {
-      username = "steve";
-      uuid = "00000000-0000-0000-0000-000000000000";
-      inventory = [];
-      position = (0., 0.);
-      location = Spawn;
-    }
-
-  (** input validation is expected to be done by the caller *)
-  let set_username user new_username =
-    {
-      username = new_username;
-      uuid = user.uuid;
-      inventory = user.inventory;
-      position = user.position;
-      location = user.location;
-    }
-
-  let set_uuid user new_uuid =
-    {
-      username = user.username;
-      uuid = new_uuid;
-      inventory = user.inventory;
-      position = user.position;
-      location = user.location;
-    }
-
-  let set_position user new_pos =
-    {
-      username = user.username;
-      uuid = user.uuid;
-      inventory = user.inventory;
-      position = new_pos;
-      location = user.location;
-    }
-end
-
 module UsersMap = Map.Make (Int)
 
 let users_map : Users.t UsersMap.t ref = ref UsersMap.empty
 let current_id = ref 0
-
-type packets_type = Error | Login | Location | Invalid
-
-type error_type =
-  | Invalid_Length
-  | Handshake_Fail
-  | Ping_Uncomplete
-  | Unexpected
-
-exception Invalid_Length
-exception Unexpected
-
-(* 0x12FF *)
-let bytes_from_list bytes =
-  let rec aux = function
-    | b :: tail, n ->
-        let _ = Bytes.set bytes n b in
-        aux (tail, n + 1)
-    | [], _ -> ()
-  in
-  aux
-
-let packet_type_to_id = function
-  | Error -> 0x00
-  | Login -> 0x01
-  | Location -> 0x02
-  | Invalid -> -1
-
-let packet_type_from_id = function
-  | 0x00 -> Error
-  | 0x01 -> Login
-  | _ -> Invalid
-
-let error_to_id = function
-  (* match __ with *)
-  | Handshake_Fail -> 0x00
-  | Invalid_Length -> 0x01
-  | Ping_Uncomplete -> 0x02
-  | Unexpected -> 0x03
-
-module PacketWriter = struct
-  type packet = { id : packets_type; data : Buffer.t }
-
-  let empty p_id =
-    let b = Buffer.create 1 in
-    Buffer.add_uint8 b (packet_type_to_id p_id);
-    { id = p_id; data = b }
-
-  let write_uint8 packet byte = Buffer.add_uint8 packet.data byte
-
-  (* {id = packet.id; data = packet.data } *)
-  let write_float packet f =
-    f |> Int64.bits_of_float |> Buffer.add_int64_le packet.data
-
-  let write_uint16 packet = Buffer.add_uint16_le packet.data
-
-  let build p =
-    let bytes = Buffer.to_bytes p.data in
-    let length = Bytes.length bytes in
-    let l_bytes = Bytes.create 2 in
-    Bytes.set_uint16_be l_bytes 0 2;
-    (Bytes.cat l_bytes bytes, length + 2)
-end
-
-module PacketReader = struct
-  type packet = { id : packets_type; data : Bytes.t; offset : int }
-
-  let empty bytes =
-    {
-      id = packet_type_from_id (Bytes.get_uint16_be bytes 0);
-      data = bytes;
-      offset = 2;
-    }
-
-  let read_uint8 packet =
-    let r = Bytes.get_uint8 packet.data packet.offset in
-    incr (ref packet.offset);
-    r
-
-  let read_float packet =
-    let r = Bytes.get_uint16_be packet.data packet.offset in
-    ref packet.offset := packet.offset + 8;
-    Float.of_int r
-end
-
-module ClientBound = struct
-  module Error = struct
-    type packet = { error_type : error_type }
-
-    let write error =
-      let packet = PacketWriter.empty Error in
-      PacketWriter.write_uint8 packet (error_to_id error);
-      PacketWriter.build packet
-  end
-
-  module Location = struct
-    type packet = { x : float; y : float; eid : int (* user id / entity id *) }
-
-    let write x y eid =
-      let packet_writer = PacketWriter.empty Location in
-      PacketWriter.write_float packet_writer x;
-      PacketWriter.write_float packet_writer y;
-      PacketWriter.write_uint16 packet_writer eid;
-      PacketWriter.build packet_writer
-  end
-end
-
-module ServerBound = struct
-  module Login = struct
-    type packet = { username : string; uuid : string }
-
-    let read bytes =
-      {
-        username = Bytes.sub_string bytes 0 16;
-        uuid = Bytes.sub_string bytes 16 32;
-      }
-    (* need proper string encoding *)
-  end
-
-  module Location = struct
-    type packet = { x : float; y : float }
-
-    let read packet_reader =
-      {
-        x = PacketReader.read_float packet_reader;
-        y = PacketReader.read_float packet_reader;
-      }
-  end
-end
-
-module Packets = struct
-  module ServerBound = ServerBound
-  module ClientBound = ClientBound
-end
 
 let login_player packet_data output =
   let login_packet = Packets.ServerBound.Login.read packet_data in
@@ -212,9 +31,8 @@ let broadcast_packet bytes length =
          Lwt_io.write_from_exactly stream bytes 0 length)
   |> List.of_seq |> Lwt.join
 
-
-let rec handle_play_packets (_input, _output) id
-    (packet_reader : PacketReader.packet) =
+let handle_play_packets (_input, _output) id
+    (packet_reader : Packets.Utils.PacketReader.packet) =
   match packet_reader.id with
   | Location ->
       let location_packet = Packets.ServerBound.Location.read packet_reader in
@@ -240,7 +58,7 @@ let rec handle_play_packets (_input, _output) id
 let close_with_reason input output reason =
   let bytes, length = Packets.ClientBound.Error.write reason in
   Lwt.finalize
-    (fun () -> Lwt_io.write_from_exactly output bytes 0 (length))
+    (fun () -> Lwt_io.write_from_exactly output bytes 0 length)
     (fun () -> Lwt.join [ Lwt_io.close input; Lwt_io.close output ])
 
 let parse_packet input =
@@ -249,10 +67,10 @@ let parse_packet input =
   else
     let bytes = Bytes.create size in
     let* () = Lwt_io.read_into_exactly input bytes 0 size in
-    Lwt.return (PacketReader.empty bytes)
+    Lwt.return (Packets.Utils.PacketReader.empty bytes)
 
 (* we should put the packets in a queue to be handled later
-   why? because if packets arrive to fast as we can handle
+   why? because if packets arrive too fast as we can handle them
    we may process packet 2 before packet 1
    no use of handling that now because i don't want to :D
 *)
@@ -265,7 +83,8 @@ let handle_client (input, output) =
           Lwt.catch
             (fun () -> handle_play_packets (input, output) !current_id packet)
             (function _ -> close_with_reason input output Unexpected));
-      if not ((Lwt_io.is_closed input) || (Lwt_io.is_closed output))  then receive_data ()
+      if not (Lwt_io.is_closed input || Lwt_io.is_closed output) then
+        receive_data ()
       else Lwt.return_unit
     with
     | Unexpected -> close_with_reason input output Unexpected
@@ -278,7 +97,7 @@ let handle_client (input, output) =
     else
       let bytes = Bytes.create size in
       let* () = Lwt_io.read_into_exactly input bytes 0 size in
-      let packet_reader = PacketReader.empty bytes in
+      let packet_reader = Packets.Utils.PacketReader.empty bytes in
       match packet_reader.id with
       | Login ->
           login_player packet_reader.data output;
