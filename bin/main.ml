@@ -4,6 +4,10 @@ open Packets.Types
 
 let max_packet_size = 65_535
 
+let println s =
+  print_endline s;
+  flush stdout
+
 module ClientsMap = Map.Make (Int)
 
 let clients_map : Lwt_io.output Lwt_io.channel ClientsMap.t ref =
@@ -16,8 +20,7 @@ let current_id = ref 0
 
 let login_player packet_data output =
   let login_packet = Packets.ServerBound.Login.read packet_data in
-  print_string
-    (login_packet.username ^ " is logging in with uuid: " ^ login_packet.uuid);
+  println (login_packet.username ^ " is logging in");
   clients_map := !clients_map |> ClientsMap.add !current_id output;
   let user = Users.init in
   let user = Users.set_username user login_packet.username in
@@ -56,13 +59,18 @@ let handle_play_packets (_input, _output) id
   | _ -> Lwt.fail Unexpected
 
 let close_with_reason input output reason =
+  (*TODO: remove the user in the map*)
+  println "closing connection";
   let bytes, length = Packets.ClientBound.Error.write reason in
-  Lwt.finalize
-    (fun () -> Lwt_io.write_from_exactly output bytes 0 length)
-    (fun () -> Lwt.join [ Lwt_io.close input; Lwt_io.close output ])
+  try%lwt
+    Lwt.finalize
+      (fun () -> Lwt_io.write_from_exactly output bytes 0 length)
+      (fun () -> Lwt.join [ Lwt_io.close input; Lwt_io.close output ])
+  with _ -> Lwt.return_unit
 
 let parse_packet input =
-  let* size = Lwt_io.read_int16 input in
+  let* size = Lwt_io.BE.read_int16 input in
+  let size = size land 0xFFFF in
   if size > max_packet_size then Lwt.fail Invalid_Length
   else
     let bytes = Bytes.create size in
@@ -89,22 +97,31 @@ let handle_client (input, output) =
     with
     | Unexpected -> close_with_reason input output Unexpected
     | Invalid_Length -> close_with_reason input output Invalid_Length
+    | _ ->
+        println "connection closed by EOF";
+        Lwt.return_unit
   in
-  let loop () =
-    let* size = Lwt_io.read_int16 input in
+  let handshake () =
+    println "handshake started";
+    let* size = Lwt_io.BE.read_int16 input in
+    let size = (size land 0xFFFF) - 2 in
+    println @@ Printf.sprintf "reading %i bytes" size;
     if size > max_packet_size (* max packet length in bytes *) then
       close_with_reason input output Invalid_Length
     else
       let bytes = Bytes.create size in
       let* () = Lwt_io.read_into_exactly input bytes 0 size in
       let packet_reader = Packets.Utils.PacketReader.empty bytes in
+      println
+      @@ Printf.sprintf "receiving packet with id: %i"
+           (Packets.Utils.Convert.id_from_packet_type packet_reader.id);
       match packet_reader.id with
       | Login ->
           login_player packet_reader.data output;
           receive_data ()
       | _ -> close_with_reason input output Handshake_Fail
   in
-  loop ()
+  try%lwt handshake () with _ -> Lwt.return_unit
 
 let rec accept_connections server_socket =
   let* client_socket, _addr = Lwt_unix.accept server_socket in
@@ -125,5 +142,6 @@ let start_server port =
   accept_connections server_socket
 
 let () =
+  Printexc.record_backtrace true;
   let port = 8080 in
   Lwt_main.run (start_server port)
