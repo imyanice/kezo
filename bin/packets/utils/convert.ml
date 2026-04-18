@@ -17,3 +17,7 @@ let packet_type_from_id = function
   | 0x00 -> Error
   | 0x01 -> Login
   | _ -> Invalid
+let id_from_packet_type = function
+  | Error -> 0x00
+  | Login -> 0x01
+  | _ -> 0xFF

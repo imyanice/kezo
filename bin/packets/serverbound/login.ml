@@ -1,8 +1,4 @@
-type packet = { username : string; uuid : string }
+type packet = { username : string; uuid : Bytes.t }
 
-let read bytes =
-  {
-    username = Bytes.sub_string bytes 0 16;
-    uuid = Bytes.sub_string bytes 16 32;
-  }
+let read bytes = { username = Bytes.sub_string bytes 0 17; uuid = Bytes.empty }
 (* need proper string encoding *)

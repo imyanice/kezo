@@ -4,7 +4,7 @@ type packet = { id : packets_type; data : Buffer.t }
 
 let empty p_id =
   let b = Buffer.create 1 in
-  Buffer.add_uint8 b (Convert.packet_type_to_id p_id);
+  Buffer.add_uint8 b (Convert.packet_type_to_id p_id); (* packet ID is 1 byte *)
   { id = p_id; data = b }
 
 let write_uint8 packet byte = Buffer.add_uint8 packet.data byte

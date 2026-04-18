@@ -3,7 +3,7 @@ module Inventory = Inventory
 
 type t = {
   username : string;
-  uuid : string;
+  uuid : Bytes.t;
   inventory : (Inventory.inventory_items * int) list;
   position : float * float;
   location : Locations.location;
@@ -12,7 +12,7 @@ type t = {
 let init =
   {
     username = "steve";
-    uuid = "00000000-0000-0000-0000-000000000000";
+    uuid = Bytes.empty;
     inventory = [];
     position = (0., 0.);
     location = Locations.Spawn;
